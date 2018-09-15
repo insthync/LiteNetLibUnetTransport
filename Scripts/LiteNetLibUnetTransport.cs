@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -9,69 +10,156 @@ using LiteNetLib;
 public class LiteNetLibUnetTransport : INetworkTransport
 {
     public const string TAG = "LiteNetLibUnetTransport";
-    public bool IsStarted => throw new System.NotImplementedException();
+
+    public string connectKey = "simpleConnectKey";
+    private int nextConnectionId = 1;
+    private int tempConnectionId;
+    private int nextHostId = 1;
+    private int tempHostId;
+    private bool isStarted;
+    private static GameObject simpleUpdaterGo;
+    private GlobalConfig globalConfig;
+    private Dictionary<int, HostTopology> topologies = new Dictionary<int, HostTopology>();
+    private Dictionary<int, NetManager> hosts = new Dictionary<int, NetManager>();
+    private Dictionary<int, NetPeer> connections = new Dictionary<int, NetPeer>();
+    private Dictionary<long, int> connectionIds = new Dictionary<long, int>();
+    private Dictionary<int, LiteNetLibEventQueueListener> hostEventListeners = new Dictionary<int, LiteNetLibEventQueueListener>();
+    private Queue<int> updatedHostEventQueue = new Queue<int>();
+    private NetManager tempHost;
+    private NetPeer tempPeer;
+    private LiteNetLibEventQueueListener tempEventListener;
+
+    public bool IsStarted
+    {
+        // True if the object has been initialized and is ready to be used.
+        get { return isStarted; }
+    }
 
     public int AddHost(HostTopology topology, int port, string ip)
     {
         // Creates a host based on HostTopology.
-        throw new System.NotImplementedException();
+        tempHostId = nextHostId++;
+        tempEventListener = new LiteNetLibEventQueueListener(this, tempHostId, topology.MaxDefaultConnections);
+        var success = false;
+        tempHost = new NetManager(tempEventListener);
+        if (!string.IsNullOrEmpty(ip))
+        {
+            if (tempHost.Start() && tempHost.Connect(ip, port, "") != null)
+                success = true;
+        }
+        else if (port > 0)
+        {
+            if (tempHost.Start(port))
+                success = true;
+        }
+        else
+        {
+            if (tempHost.Start())
+                success = true;
+        }
+
+        if (success)
+        {
+            topologies.Add(tempHostId, topology);
+            hosts.Add(tempHostId, tempHost);
+            hostEventListeners.Add(tempHostId, tempEventListener);
+            Debug.Log("[" + TAG + "] added host " + tempHostId + " port=" + port + " ip=" + ip);
+        }
+        else
+        {
+            tempHost.Stop();
+            Debug.Log("[" + TAG + "] cannot add host " + tempHostId + " port=" + port + " ip=" + ip);
+        }
+        return tempHostId;
     }
 
     public int AddHostWithSimulator(HostTopology topology, int minTimeout, int maxTimeout, int port)
     {
         // Creates a host and configures it to simulate Internet latency(works on Editor and development
         // builds only).
-        Debug.LogError("[" + TAG + "] AddHostWithSimulator() not implemented");
-        throw new System.NotImplementedException();
+        Debug.LogWarning("[" + TAG + "] AddHostWithSimulator() not implemented, it will use AddHost()");
+        return AddHost(topology, port, null);
     }
 
     public int AddWebsocketHost(HostTopology topology, int port, string ip)
     {
         // Creates a web socket host.
-        Debug.LogError("[" + TAG + "] AddWebsocketHost() not implemented");
-        throw new System.NotImplementedException();
+        Debug.LogWarning("[" + TAG + "] AddWebsocketHost() not implemented, it will use AddHost()");
+        return AddHost(topology, port, ip);
     }
 
     public int Connect(int hostId, string address, int port, int specialConnectionId, out byte error)
     {
         // Tries to establish a connection to another peer.
-        throw new System.NotImplementedException();
+        Debug.Log("[" + TAG + "] Connecting to hostId " + hostId + " address " + address + " port " + port);
+        error = (byte)NetworkError.UsageError;
+        tempConnectionId = 0;
+        if (hosts.ContainsKey(hostId))
+        {
+            tempPeer = hosts[hostId].Connect(address, port, "");
+            if (tempPeer != null)
+            {
+                tempConnectionId = nextConnectionId++;
+                connections[tempConnectionId] = tempPeer;
+                connectionIds[tempPeer.ConnectId] = tempConnectionId;
+                error = (byte)NetworkError.Ok;
+            }
+            else
+            {
+                Debug.LogError("[" + TAG + "] Cannot connect to hostId " + hostId + " address " + address + " port " + port);
+            }
+        }
+        else
+        {
+            Debug.LogError("[" + TAG + "] Cannot connect to hostId " + hostId);
+        }
+        return tempConnectionId;
     }
 
     public void ConnectAsNetworkHost(int hostId, string address, int port, NetworkID network, SourceID source, NodeID node, out byte error)
     {
         // Creates a dedicated connection to Relay server
-        error = (byte)NetworkError.Timeout;
+        Debug.LogError("[" + TAG + "] ConnectAsNetworkHost() not implemented");
+        throw new System.NotImplementedException();
     }
 
     public int ConnectEndPoint(int hostId, EndPoint endPoint, int specialConnectionId, out byte error)
     {
         // Tries to establish a connection to the peer specified by the given C# System.EndPoint.
-        throw new System.NotImplementedException();
+        return Connect(hostId, ((IPEndPoint)endPoint).Address.ToString(), ((IPEndPoint)endPoint).Port, specialConnectionId, out error);
     }
 
     public int ConnectToNetworkPeer(int hostId, string address, int port, int specialConnectionId, int relaySlotId, NetworkID network, SourceID source, NodeID node, out byte error)
     {
         // Creates a connection to another peer in the Relay group.
+        Debug.LogError("[" + TAG + "] ConnectToNetworkPeer() not implemented");
         throw new System.NotImplementedException();
     }
 
     public int ConnectWithSimulator(int hostId, string address, int port, int specialConnectionId, out byte error, ConnectionSimulatorConfig conf)
     {
         // Tries to establish a connection to another peer with added simulated latency.
-        throw new System.NotImplementedException();
+        Debug.LogWarning("[" + TAG + "] ConnectWithSimulator() not implemented, it will use Connect()");
+        return Connect(hostId, address, port, specialConnectionId, out error);
     }
 
     public bool Disconnect(int hostId, int connectionId, out byte error)
     {
         // Sends a disconnect signal to the connected peer and closes the connection.
-        throw new System.NotImplementedException();
+        if (hosts.ContainsKey(hostId) && connections.ContainsKey(connectionId))
+        {
+            error = (byte)NetworkError.Ok;
+            hosts[hostId].DisconnectPeer(connections[connectionId]);
+            return true;
+        }
+        error = (byte)NetworkError.UsageError;
+        return false;
     }
 
     public bool DoesEndPointUsePlatformProtocols(EndPoint endPoint)
     {
         // Checks whether the specified end point uses platform-specific protocols.
-        throw new System.NotImplementedException();
+        return false;
     }
 
     public void GetBroadcastConnectionInfo(int hostId, out string address, out int port, out byte error)
@@ -79,6 +167,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
         // After INetworkTransport.Receive() returns a NetworkEventType.BroadcastEvent, this function 
         // returns the connection information of the broadcast sender. This information can then be used 
         // for connecting to the broadcast sender.
+        Debug.LogError("[" + TAG + "] GetBroadcastConnectionInfo() not implemented");
         throw new System.NotImplementedException();
     }
 
@@ -86,6 +175,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
     {
         // 	After INetworkTransport.Receive() returns NetworkEventType.BroadcastEvent, this function
         // returns a complimentary message from the broadcast sender.
+        Debug.LogError("[" + TAG + "] GetBroadcastConnectionMessage() not implemented");
         throw new System.NotImplementedException();
     }
 
@@ -94,7 +184,18 @@ public class LiteNetLibUnetTransport : INetworkTransport
         // Returns the connection parameters for the specified connectionId. These parameters can be sent
         // to other users to establish a direct connection to this peer. If this peer is connected to the host
         // via Relay, the Relay-related parameters are set.
-        throw new System.NotImplementedException();
+        Debug.Log("[" + TAG + "] GetConnectionInfo()");
+        address = "";
+        port = -1;
+        network = NetworkID.Invalid;
+        dstNode = NodeID.Invalid;
+        error = (byte)NetworkError.UsageError;
+        if (connections.ContainsKey(connectionId))
+        {
+            address = connections[connectionId].EndPoint.Address.ToString();
+            port = connections[connectionId].EndPoint.Port;
+            error = (byte)NetworkError.Ok;
+        }
     }
 
     public int GetCurrentRTT(int hostId, int connectionId, out byte error)
@@ -109,75 +210,188 @@ public class LiteNetLibUnetTransport : INetworkTransport
     {
         // Initializes the object implementing INetworkTransport. Must be called before doing any other
         // operations on the object.
-        throw new System.NotImplementedException();
+        Debug.Log("[" + TAG + "] Init() globalConfig=" + (globalConfig != null));
+        if (simpleUpdaterGo == null)
+        {
+            // TODO: may change to thread later or may run coroutine on NetworkManager
+            simpleUpdaterGo = new GameObject("LiteNetLibUnetTransportUpdater");
+            simpleUpdaterGo.AddComponent<LiteNetLibUnetTransportUpdater>();
+            Object.DontDestroyOnLoad(simpleUpdaterGo);
+        }
+        isStarted = true;
     }
 
     public void Init(GlobalConfig config)
     {
         // Initializes the object implementing INetworkTransport. Must be called before doing any other
         // operations on the object.
-        throw new System.NotImplementedException();
+        globalConfig = config;
+        Init();
     }
 
     public NetworkEventType Receive(out int hostId, out int connectionId, out int channelId, byte[] buffer, int bufferSize, out int receivedSize, out byte error)
     {
         // Polls the underlying system for events.
-        throw new System.NotImplementedException();
+        hostId = updatedHostEventQueue.Dequeue();
+        return ReceiveFromHost(hostId, out connectionId, out channelId, buffer, bufferSize, out receivedSize, out error);
     }
 
     public NetworkEventType ReceiveFromHost(int hostId, out int connectionId, out int channelId, byte[] buffer, int bufferSize, out int receivedSize, out byte error)
     {
         // Similar to INetworkTransport.Receive but will only poll for the provided hostId.
-        throw new System.NotImplementedException();
+        connectionId = 0;
+        channelId = 0;
+        receivedSize = 0;
+        error = (byte)NetworkError.Ok;
+
+        Debug.Log("[" + TAG + "] Receiving data from host " + hostId + " queue events: " + hostEventListeners.Count);
+        // Receive events data after poll events, and send out data
+        if (!hostEventListeners.TryGetValue(hostId, out tempEventListener) || 
+            tempEventListener.eventQueue.Count <= 0)
+            return NetworkEventType.Nothing;
+
+        var eventData = tempEventListener.eventQueue.Dequeue();
+        connectionId = connectionIds[eventData.netPeer.ConnectId];
+        error = eventData.error;
+        if (eventData.eventType == NetworkEventType.DataEvent)
+        {
+            var length = eventData.data.Length;
+            if (length <= bufferSize)
+            {
+                System.Buffer.BlockCopy(eventData.data, 0, buffer, 0, length);
+                receivedSize = length;
+            }
+            else
+                error = (byte)NetworkError.MessageToLong;
+        }
+        return eventData.eventType;
     }
 
     public NetworkEventType ReceiveRelayEventFromHost(int hostId, out byte error)
     {
         // Polls the host for the following events: NetworkEventType.ConnectEvent and
         // NetworkEventType.DisconnectEvent.
+        Debug.LogError("[" + TAG + "] ReceiveRelayEventFromHost() not implemented");
         throw new System.NotImplementedException();
     }
 
     public bool RemoveHost(int hostId)
     {
         // Closes the opened transport pipe, and closes all connections belonging to that transport pipe.
-        throw new System.NotImplementedException();
+        NetManager host;
+        if (hosts.TryGetValue(hostId, out host))
+        {
+            var tempNetPeers = connections.ToArray();
+            foreach (var entry in tempNetPeers)
+            {
+                host.DisconnectPeer(entry.Value);
+                connections.Remove(entry.Key);
+                connectionIds.Remove(entry.Value.ConnectId);
+            }
+            hosts.Remove(hostId);
+            return true;
+        }
+        return false;
     }
 
     public bool Send(int hostId, int connectionId, int channelId, byte[] buffer, int size, out byte error)
     {
         // Sends data to peer with the given connection ID.
-        throw new System.NotImplementedException();
+        error = (byte)NetworkError.UsageError;
+        if (hosts.ContainsKey(hostId) && connections.ContainsKey(connectionId))
+        {
+            var sendOptions = DeliveryMethod.Unreliable;
+            switch (topologies[hostId].DefaultConfig.Channels[channelId].QOS)
+            {
+                case QosType.AllCostDelivery:
+                case QosType.ReliableStateUpdate:
+                case QosType.ReliableFragmentedSequenced:
+                    sendOptions = DeliveryMethod.ReliableOrdered;
+                    break;
+                case QosType.ReliableSequenced:
+                    sendOptions = DeliveryMethod.ReliableSequenced;
+                    break;
+                case QosType.Reliable:
+                case QosType.ReliableFragmented:
+                    sendOptions = DeliveryMethod.ReliableUnordered;
+                    break;
+                case QosType.StateUpdate:
+                case QosType.UnreliableFragmentedSequenced:
+                case QosType.UnreliableSequenced:
+                    sendOptions = DeliveryMethod.Sequenced;
+                    break;
+            }
+            connections[connectionId].Send(buffer, 0, size, sendOptions);
+            error = (byte)NetworkError.Ok;
+            return true;
+        }
+        return false;
     }
 
     public void SetBroadcastCredentials(int hostId, int key, int version, int subversion, out byte error)
     {
         // Sets the credentials required for receiving broadcast messages. If the credentials of a received
         // broadcast message do not match, that broadcast discovery message is dropped.
+        Debug.LogError("[" + TAG + "] SetBroadcastCredentials() not implemented");
         throw new System.NotImplementedException();
     }
 
     public void SetPacketStat(int direction, int packetStatId, int numMsgs, int numBytes)
     {
         // Keeps track of network packet statistics.
-        throw new System.NotImplementedException();
     }
 
     public void Shutdown()
     {
         // Shuts down the transport object.
-        throw new System.NotImplementedException();
+        var tempHosts = hosts.Values.ToArray();
+        foreach (var host in tempHosts)
+        {
+            var tempNetPeers = connections.ToArray();
+            foreach (var entry in tempNetPeers)
+            {
+                host.DisconnectPeer(entry.Value);
+                connections.Remove(entry.Key);
+                connectionIds.Remove(entry.Value.ConnectId);
+            }
+            host.Stop();
+        }
+        connections.Clear();
+        connectionIds.Clear();
+        hosts.Clear();
+        nextConnectionId = 1;
+        nextHostId = 1;
     }
 
     public bool StartBroadcastDiscovery(int hostId, int broadcastPort, int key, int version, int subversion, byte[] buffer, int size, int timeout, out byte error)
     {
         // Starts sending a broadcasting message across all local subnets.
+        Debug.LogError("[" + TAG + "] StartBroadcastDiscovery() not implemented");
         throw new System.NotImplementedException();
     }
 
     public void StopBroadcastDiscovery()
     {
         // Stops sending the broadcast discovery message across all local subnets.
+        Debug.LogError("[" + TAG + "] StopBroadcastDiscovery() not implemented");
         throw new System.NotImplementedException();
+    }
+
+    public void UpdateHostEventListener(int hostId)
+    {
+        updatedHostEventQueue.Enqueue(hostId);
+    }
+
+    public NetManager GetHost(int hostId)
+    {
+        return hosts[hostId];
+    }
+
+    public void PollEvents()
+    {
+        foreach (var host in hosts.Values)
+        {
+            host.PollEvents();
+        }
     }
 }
