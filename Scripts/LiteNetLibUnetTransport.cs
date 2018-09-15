@@ -44,7 +44,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
         tempHost = new NetManager(tempEventListener);
         if (!string.IsNullOrEmpty(ip))
         {
-            if (tempHost.Start() && tempHost.Connect(ip, port, "") != null)
+            if (tempHost.Start(ip, "", port))
                 success = true;
         }
         else if (port > 0)
