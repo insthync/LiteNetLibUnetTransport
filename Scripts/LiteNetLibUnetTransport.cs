@@ -315,6 +315,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
                 connections.Remove(entry.Key);
                 connectionIds.Remove(entry.Value.ConnectId);
             }
+            host.Stop();
             hosts.Remove(hostId);
             return true;
         }
@@ -374,6 +375,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public void SetPacketStat(int direction, int packetStatId, int numMsgs, int numBytes)
     {
         // Keeps track of network packet statistics.
+        NetworkManager.defaultTransport.SetPacketStat(direction, packetStatId, numMsgs, numBytes);
     }
 
     public void Shutdown()
