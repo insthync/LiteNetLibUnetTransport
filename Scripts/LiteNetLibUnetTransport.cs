@@ -44,7 +44,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
         tempHost = new NetManager(tempEventListener);
         if (!string.IsNullOrEmpty(ip))
         {
-            if (tempHost.Start(ip, "", port))
+            if (tempHost.Start(IPAddress.Parse(ip), IPAddress.IPv6Any, port))
                 success = true;
         }
         else if (port > 0)
@@ -218,6 +218,9 @@ public class LiteNetLibUnetTransport : INetworkTransport
             simpleUpdaterGo.AddComponent<LiteNetLibUnetTransportUpdater>();
             Object.DontDestroyOnLoad(simpleUpdaterGo);
         }
+        // Init default transport to make everything works, this is HACK
+        // I actually don't know what I have to do with init function
+        NetworkManager.defaultTransport.Init();
         isStarted = true;
     }
 
@@ -232,7 +235,15 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public NetworkEventType Receive(out int hostId, out int connectionId, out int channelId, byte[] buffer, int bufferSize, out int receivedSize, out byte error)
     {
         // Polls the underlying system for events.
-        hostId = updatedHostEventQueue.Dequeue();
+        hostId = 0;
+        connectionId = 0;
+        channelId = 0;
+        receivedSize = 0;
+        error = (byte)NetworkError.Ok;
+        if (updatedHostEventQueue.Count > 0)
+            hostId = updatedHostEventQueue.Dequeue();
+        else
+            return NetworkEventType.Nothing;
         return ReceiveFromHost(hostId, out connectionId, out channelId, buffer, bufferSize, out receivedSize, out error);
     }
 
@@ -244,26 +255,41 @@ public class LiteNetLibUnetTransport : INetworkTransport
         receivedSize = 0;
         error = (byte)NetworkError.Ok;
 
-        Debug.Log("[" + TAG + "] Receiving data from host " + hostId + " queue events: " + hostEventListeners.Count);
+        if (!hosts.ContainsKey(hostId))
+        {
+            error = (byte)NetworkError.WrongHost;
+            return NetworkEventType.Nothing;
+        }
+
         // Receive events data after poll events, and send out data
         if (!hostEventListeners.TryGetValue(hostId, out tempEventListener) || 
             tempEventListener.eventQueue.Count <= 0)
             return NetworkEventType.Nothing;
 
         var eventData = tempEventListener.eventQueue.Dequeue();
-        connectionId = connectionIds[eventData.netPeer.ConnectId];
         error = eventData.error;
-        if (eventData.eventType == NetworkEventType.DataEvent)
+        switch (eventData.eventType)
         {
-            var length = eventData.data.Length;
-            if (length <= bufferSize)
-            {
-                System.Buffer.BlockCopy(eventData.data, 0, buffer, 0, length);
-                receivedSize = length;
-            }
-            else
-                error = (byte)NetworkError.MessageToLong;
+            case NetworkEventType.ConnectEvent:
+                if (!connectionIds.ContainsKey(eventData.netPeer.ConnectId))
+                {
+                    connectionId = nextConnectionId++;
+                    connections.Add(connectionId, eventData.netPeer);
+                    connectionIds.Add(eventData.netPeer.ConnectId, connectionId);
+                }
+                break;
+            case NetworkEventType.DataEvent:
+                var length = eventData.data.Length;
+                if (length <= bufferSize)
+                {
+                    System.Buffer.BlockCopy(eventData.data, 0, buffer, 0, length);
+                    receivedSize = length;
+                }
+                else
+                    error = (byte)NetworkError.MessageToLong;
+                break;
         }
+        connectionId = connectionIds[eventData.netPeer.ConnectId];
         return eventData.eventType;
     }
 
@@ -298,34 +324,42 @@ public class LiteNetLibUnetTransport : INetworkTransport
     {
         // Sends data to peer with the given connection ID.
         error = (byte)NetworkError.UsageError;
-        if (hosts.ContainsKey(hostId) && connections.ContainsKey(connectionId))
+        if (!hosts.ContainsKey(hostId))
         {
-            var sendOptions = DeliveryMethod.Unreliable;
-            switch (topologies[hostId].DefaultConfig.Channels[channelId].QOS)
-            {
-                case QosType.AllCostDelivery:
-                case QosType.ReliableStateUpdate:
-                case QosType.ReliableFragmentedSequenced:
-                    sendOptions = DeliveryMethod.ReliableOrdered;
-                    break;
-                case QosType.ReliableSequenced:
-                    sendOptions = DeliveryMethod.ReliableSequenced;
-                    break;
-                case QosType.Reliable:
-                case QosType.ReliableFragmented:
-                    sendOptions = DeliveryMethod.ReliableUnordered;
-                    break;
-                case QosType.StateUpdate:
-                case QosType.UnreliableFragmentedSequenced:
-                case QosType.UnreliableSequenced:
-                    sendOptions = DeliveryMethod.Sequenced;
-                    break;
-            }
-            connections[connectionId].Send(buffer, 0, size, sendOptions);
-            error = (byte)NetworkError.Ok;
-            return true;
+            error = (byte)NetworkError.WrongHost;
+            return false;
         }
-        return false;
+
+        if (!connections.ContainsKey(connectionId))
+        {
+            error = (byte)NetworkError.WrongConnection;
+            return false;
+        }
+
+        var sendOptions = DeliveryMethod.Unreliable;
+        switch (topologies[hostId].DefaultConfig.Channels[channelId].QOS)
+        {
+            case QosType.AllCostDelivery:
+            case QosType.ReliableStateUpdate:
+            case QosType.ReliableFragmentedSequenced:
+                sendOptions = DeliveryMethod.ReliableOrdered;
+                break;
+            case QosType.ReliableSequenced:
+                sendOptions = DeliveryMethod.ReliableSequenced;
+                break;
+            case QosType.Reliable:
+            case QosType.ReliableFragmented:
+                sendOptions = DeliveryMethod.ReliableUnordered;
+                break;
+            case QosType.StateUpdate:
+            case QosType.UnreliableFragmentedSequenced:
+            case QosType.UnreliableSequenced:
+                sendOptions = DeliveryMethod.Sequenced;
+                break;
+        }
+        connections[connectionId].Send(buffer, 0, size, sendOptions);
+        error = (byte)NetworkError.Ok;
+        return true;
     }
 
     public void SetBroadcastCredentials(int hostId, int key, int version, int subversion, out byte error)
