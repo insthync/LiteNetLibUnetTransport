@@ -308,8 +308,8 @@ public class LiteNetLibUnetTransport : INetworkTransport
         NetManager host;
         if (hosts.TryGetValue(hostId, out host))
         {
-            var tempNetPeers = connections.ToArray();
-            foreach (var entry in tempNetPeers)
+            var tempConnections = connections.ToArray();
+            foreach (var entry in tempConnections)
             {
                 host.DisconnectPeer(entry.Value);
                 connections.Remove(entry.Key);
@@ -381,17 +381,10 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public void Shutdown()
     {
         // Shuts down the transport object.
-        var tempHosts = hosts.Values.ToArray();
-        foreach (var host in tempHosts)
+        var tempHosts = hosts.Keys.ToArray();
+        foreach (var hostId in tempHosts)
         {
-            var tempNetPeers = connections.ToArray();
-            foreach (var entry in tempNetPeers)
-            {
-                host.DisconnectPeer(entry.Value);
-                connections.Remove(entry.Key);
-                connectionIds.Remove(entry.Value.ConnectId);
-            }
-            host.Stop();
+            RemoveHost(hostId);
         }
         connections.Clear();
         connectionIds.Clear();
