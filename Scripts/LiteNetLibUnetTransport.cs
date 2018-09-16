@@ -253,6 +253,16 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public int GetCurrentRTT(int hostId, int connectionId, out byte error)
     {
         // Return the round trip time for the given connectionId.
+        if (!connections.ContainsKey(hostId))
+        {
+            error = (byte)NetworkError.WrongHost;
+            return 0;
+        }
+        if (!connections[hostId].ContainsKey(connectionId))
+        {
+            error = (byte)NetworkError.WrongConnection;
+            return 0;
+        }
         // TODO: implement this
         error = (byte)NetworkError.Ok;
         return 0;
