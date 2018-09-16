@@ -43,6 +43,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
         tempEventListener = new LiteNetLibEventQueueListener(this, tempHostId, topology.MaxDefaultConnections);
         var success = false;
         tempHost = new NetManager(tempEventListener);
+        tempHost.UpdateTime = 15;
         if (!string.IsNullOrEmpty(ip))
         {
             if (tempHost.Start(IPAddress.Parse(ip), IPAddress.IPv6Any, port))
