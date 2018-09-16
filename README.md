@@ -1,7 +1,6 @@
 # LiteNetLibUnetTransport
 
-This is transport layer for UNET HLAPI, it is require Unity 2018.3 or above
-which uses [LiteNetLib](https://github.com/RevenantX/LiteNetLib) version 0.8
+This is project which make [LiteNetLib](https://github.com/RevenantX/LiteNetLib) version 0.8 as transport layer for UNET HLAPI, it is require Unity 2018.3 or above
 
 ## How to change transport layer for UNET HLAPI
 
