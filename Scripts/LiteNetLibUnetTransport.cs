@@ -55,7 +55,11 @@ public class LiteNetLibUnetTransport : INetworkTransport
         // Create new host with its event listener
         tempEventListener = new LiteNetLibEventQueueListener(this, hostId, specialConnectionId, maxConnections);
         tempHost = new NetManager(tempEventListener);
-        
+        tempHost.PingInterval = (int)config.PingTimeout;
+        tempHost.DisconnectTimeout = (int)config.DisconnectTimeout;
+        tempHost.ReconnectDelay = (int)config.ConnectTimeout;
+        tempHost.MaxConnectAttempts = (int)config.MaxConnectionAttempt;
+
         if (specialConnectionId > 0)
         {
             if (tempHost.Start())
