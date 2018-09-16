@@ -17,15 +17,12 @@ public class LiteNetLibUnetTransport : INetworkTransport
     private int nextHostId = 1;
     private int tempHostId;
     private bool isStarted;
-    private Thread pollEventThread;
-    private bool isPollEventRunning;
     private GlobalConfig globalConfig;
     private Dictionary<int, HostTopology> topologies = new Dictionary<int, HostTopology>();
     private Dictionary<int, Dictionary<int, NetManager>> hosts = new Dictionary<int, Dictionary<int, NetManager>>();
     private Dictionary<int, Dictionary<int, NetPeer>> connections = new Dictionary<int, Dictionary<int, NetPeer>>();
     private Dictionary<long, int> connectionIds = new Dictionary<long, int>();
     private Dictionary<int, LiteNetLibEventQueueListener> hostEventListeners = new Dictionary<int, LiteNetLibEventQueueListener>();
-    private Queue<int> updatedHostEventQueue = new Queue<int>();
     private NetManager tempHost;
     private NetPeer tempPeer;
     private LiteNetLibEventQueueListener tempEventListener;
@@ -273,12 +270,6 @@ public class LiteNetLibUnetTransport : INetworkTransport
         // Initializes the object implementing INetworkTransport. Must be called before doing any other
         // operations on the object.
         Debug.Log("[" + TAG + "] Init() globalConfig=" + (globalConfig != null));
-        if (!isPollEventRunning)
-        {
-            pollEventThread = new Thread(new ThreadStart(PollEventThreadFunction));
-            pollEventThread.Start();
-            isPollEventRunning = true;
-        }
         // Init default transport to make everything works, this is HACK
         // I actually don't know what I have to do with init function
         NetworkManager.defaultTransport.Init();
@@ -301,11 +292,16 @@ public class LiteNetLibUnetTransport : INetworkTransport
         channelId = 0;
         receivedSize = 0;
         error = (byte)NetworkError.Ok;
-        if (updatedHostEventQueue.Count > 0)
-            hostId = updatedHostEventQueue.Dequeue();
-        else
-            return NetworkEventType.Nothing;
-        return ReceiveFromHost(hostId, out connectionId, out channelId, buffer, bufferSize, out receivedSize, out error);
+        foreach (var currentHostId in hosts.Keys)
+        {
+            var result = ReceiveFromHost(currentHostId, out connectionId, out channelId, buffer, bufferSize, out receivedSize, out error);
+            if (result != NetworkEventType.Nothing)
+            {
+                hostId = currentHostId;
+                return result;
+            }
+        }
+        return NetworkEventType.Nothing;
     }
 
     public NetworkEventType ReceiveFromHost(int hostId, out int connectionId, out int channelId, byte[] buffer, int bufferSize, out int receivedSize, out byte error)
@@ -321,7 +317,11 @@ public class LiteNetLibUnetTransport : INetworkTransport
             error = (byte)NetworkError.WrongHost;
             return NetworkEventType.Nothing;
         }
-
+        var hostsByConfig = hosts[hostId].Values;
+        foreach (var hostByConfig in hostsByConfig)
+        {
+            hostByConfig.PollEvents();
+        }
         // Receive events data after poll events, and send out data
         if (!hostEventListeners.TryGetValue(hostId, out tempEventListener) || 
             tempEventListener.eventQueue.Count <= 0)
@@ -459,11 +459,6 @@ public class LiteNetLibUnetTransport : INetworkTransport
         hosts.Clear();
         nextConnectionId = 1;
         nextHostId = 1;
-        if (isPollEventRunning)
-        {
-            isPollEventRunning = false;
-            pollEventThread.Abort();
-        }
     }
 
     public bool StartBroadcastDiscovery(int hostId, int broadcastPort, int key, int version, int subversion, byte[] buffer, int size, int timeout, out byte error)
@@ -480,36 +475,8 @@ public class LiteNetLibUnetTransport : INetworkTransport
         throw new System.NotImplementedException();
     }
 
-    public void UpdateHostEventListener(int hostId)
-    {
-        updatedHostEventQueue.Enqueue(hostId);
-    }
-
     public NetManager GetHost(int hostId, int specialConnectionId)
     {
         return hosts[hostId][specialConnectionId];
-    }
-    
-    private void PollEventThreadFunction()
-    {
-        while (isPollEventRunning)
-        {
-            var hosts = this.hosts.Values;
-            lock (hosts)
-            {
-                foreach (var host in hosts)
-                {
-                    var hostsByConfig = host.Values;
-                    lock (hostsByConfig)
-                    {
-                        foreach (var hostByConfig in hostsByConfig)
-                        {
-                            hostByConfig.PollEvents();
-                        }
-                    }
-                }
-            }
-            Thread.Sleep(15);
-        }
     }
 }
