@@ -265,7 +265,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
         }
         // TODO: implement this
         error = (byte)NetworkError.Ok;
-        return 0;
+        return connections[hostId][connectionId].Ping;
     }
 
     public void Init()
