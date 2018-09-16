@@ -301,10 +301,6 @@ public class LiteNetLibUnetTransport : INetworkTransport
                 return result;
             }
         }
-        hostId = 0;
-        connectionId = 0;
-        channelId = 0;
-        receivedSize = 0;
         return NetworkEventType.Nothing;
     }
 
