@@ -6,18 +6,19 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.Networking.Types;
 using LiteNetLib;
+using System.Threading;
 
 public class LiteNetLibUnetTransport : INetworkTransport
 {
     public const string TAG = "LiteNetLibUnetTransport";
-
-    public string connectKey = "simpleConnectKey";
+    
     private int nextConnectionId = 1;
     private int tempConnectionId;
     private int nextHostId = 1;
     private int tempHostId;
     private bool isStarted;
-    private static GameObject simpleUpdaterGo;
+    private Thread pollEventThread;
+    private bool isPollEventRunning;
     private GlobalConfig globalConfig;
     private Dictionary<int, HostTopology> topologies = new Dictionary<int, HostTopology>();
     private Dictionary<int, NetManager> hosts = new Dictionary<int, NetManager>();
@@ -211,12 +212,11 @@ public class LiteNetLibUnetTransport : INetworkTransport
         // Initializes the object implementing INetworkTransport. Must be called before doing any other
         // operations on the object.
         Debug.Log("[" + TAG + "] Init() globalConfig=" + (globalConfig != null));
-        if (simpleUpdaterGo == null)
+        if (!isPollEventRunning)
         {
-            // TODO: may change to thread later or may run coroutine on NetworkManager
-            simpleUpdaterGo = new GameObject("LiteNetLibUnetTransportUpdater");
-            simpleUpdaterGo.AddComponent<LiteNetLibUnetTransportUpdater>();
-            Object.DontDestroyOnLoad(simpleUpdaterGo);
+            pollEventThread = new Thread(new ThreadStart(PollEventThreadFunction));
+            pollEventThread.Start();
+            isPollEventRunning = true;
         }
         // Init default transport to make everything works, this is HACK
         // I actually don't know what I have to do with init function
@@ -395,6 +395,11 @@ public class LiteNetLibUnetTransport : INetworkTransport
         hosts.Clear();
         nextConnectionId = 1;
         nextHostId = 1;
+        if (isPollEventRunning)
+        {
+            isPollEventRunning = false;
+            pollEventThread.Abort();
+        }
     }
 
     public bool StartBroadcastDiscovery(int hostId, int broadcastPort, int key, int version, int subversion, byte[] buffer, int size, int timeout, out byte error)
@@ -420,12 +425,20 @@ public class LiteNetLibUnetTransport : INetworkTransport
     {
         return hosts[hostId];
     }
-
-    public void PollEvents()
+    
+    private void PollEventThreadFunction()
     {
-        foreach (var host in hosts.Values)
+        while (isPollEventRunning)
         {
-            host.PollEvents();
+            var hostValues = hosts.Values;
+            lock (hostValues)
+            {
+                foreach (var host in hostValues)
+                {
+                    host.PollEvents();
+                }
+            }
+            Thread.Sleep(15);
         }
     }
 }
