@@ -45,7 +45,6 @@ public class LiteNetLibEventQueueListener : INetEventListener
         tempEventData.data = reader.GetRemainingBytes();
         tempEventData.error = (byte)NetworkError.Ok;
         eventQueue.Enqueue(tempEventData);
-        transport.UpdateHostEventListener(hostId);
     }
 
     public void OnNetworkReceiveUnconnected(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType)
@@ -63,7 +62,6 @@ public class LiteNetLibEventQueueListener : INetEventListener
         tempEventData.data = null;
         tempEventData.error = (byte)NetworkError.Ok;
         eventQueue.Enqueue(tempEventData);
-        transport.UpdateHostEventListener(hostId);
     }
 
     public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
@@ -91,7 +89,6 @@ public class LiteNetLibEventQueueListener : INetEventListener
                 break;
         }
         eventQueue.Enqueue(tempEventData);
-        transport.UpdateHostEventListener(hostId);
     }
 
     public void OnConnectionRequest(ConnectionRequest request)
