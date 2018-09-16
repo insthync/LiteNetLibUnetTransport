@@ -21,8 +21,8 @@ public class LiteNetLibUnetTransport : INetworkTransport
     private bool isPollEventRunning;
     private GlobalConfig globalConfig;
     private Dictionary<int, HostTopology> topologies = new Dictionary<int, HostTopology>();
-    private Dictionary<int, NetManager> hosts = new Dictionary<int, NetManager>();
-    private Dictionary<int, NetPeer> connections = new Dictionary<int, NetPeer>();
+    private Dictionary<int, Dictionary<int, NetManager>> hosts = new Dictionary<int, Dictionary<int, NetManager>>();
+    private Dictionary<int, Dictionary<int, NetPeer>> connections = new Dictionary<int, Dictionary<int, NetPeer>>();
     private Dictionary<long, int> connectionIds = new Dictionary<long, int>();
     private Dictionary<int, LiteNetLibEventQueueListener> hostEventListeners = new Dictionary<int, LiteNetLibEventQueueListener>();
     private Queue<int> updatedHostEventQueue = new Queue<int>();
@@ -36,41 +36,75 @@ public class LiteNetLibUnetTransport : INetworkTransport
         get { return isStarted; }
     }
 
-    public int AddHost(HostTopology topology, int port, string ip)
+    private void AddConnection(int hostId, int connectionId, NetPeer peer)
     {
-        // Creates a host based on HostTopology.
-        tempHostId = nextHostId++;
-        tempEventListener = new LiteNetLibEventQueueListener(this, tempHostId, topology.MaxDefaultConnections);
+        if (!connections.ContainsKey(hostId))
+            connections.Add(hostId, new Dictionary<int, NetPeer>());
+        connections[hostId][connectionId] = peer;
+        connectionIds[peer.ConnectId] = connectionId;
+    }
+
+    private bool AddHostByConfig(int hostId, int port, string ip, int specialConnectionId, HostTopology topology)
+    {
         var success = false;
+        var maxConnections = topology.MaxDefaultConnections;
+        var config = topology.DefaultConfig;
+        if (specialConnectionId > 0)
+            config = topology.SpecialConnectionConfigs[specialConnectionId - 1];
+
+        // Create new host with its event listener
+        tempEventListener = new LiteNetLibEventQueueListener(this, hostId, specialConnectionId, maxConnections);
         tempHost = new NetManager(tempEventListener);
-        tempHost.UpdateTime = 15;
-        if (!string.IsNullOrEmpty(ip))
-        {
-            if (tempHost.Start(IPAddress.Parse(ip), IPAddress.IPv6Any, port))
-                success = true;
-        }
-        else if (port > 0)
-        {
-            if (tempHost.Start(port))
-                success = true;
-        }
-        else
+        
+        if (specialConnectionId > 0)
         {
             if (tempHost.Start())
                 success = true;
         }
+        else
+        {
+            if (!string.IsNullOrEmpty(ip))
+            {
+                if (tempHost.Start(IPAddress.Parse(ip), IPAddress.IPv6Any, port))
+                    success = true;
+            }
+            else if (port > 0)
+            {
+                if (tempHost.Start(port))
+                    success = true;
+            }
+            else
+            {
+                if (tempHost.Start())
+                    success = true;
+            }
+        }
 
         if (success)
         {
-            topologies.Add(tempHostId, topology);
-            hosts.Add(tempHostId, tempHost);
-            hostEventListeners.Add(tempHostId, tempEventListener);
-            Debug.Log("[" + TAG + "] added host " + tempHostId + " port=" + port + " ip=" + ip);
+            if (!hosts.ContainsKey(hostId))
+                hosts.Add(hostId, new Dictionary<int, NetManager>());
+            hosts[hostId][specialConnectionId] = tempHost;
+            hostEventListeners.Add(hostId, tempEventListener);
+            Debug.Log("[" + TAG + "] added host " + hostId + " port=" + port + " ip=" + ip);
         }
         else
         {
             tempHost.Stop();
-            Debug.Log("[" + TAG + "] cannot add host " + tempHostId + " port=" + port + " ip=" + ip);
+            Debug.Log("[" + TAG + "] cannot add host " + hostId + " port=" + port + " ip=" + ip);
+        }
+
+        return success;
+    }
+
+    public int AddHost(HostTopology topology, int port, string ip)
+    {
+        // Creates a host based on HostTopology.
+        tempHostId = nextHostId++;
+        topologies[tempHostId] = topology;
+        for (var i = 0; i < topology.SpecialConnectionConfigsCount + 1; ++i)
+        {
+            AddHostByConfig(tempHostId, port, ip, i, topology);
         }
         return tempHostId;
     }
@@ -98,12 +132,11 @@ public class LiteNetLibUnetTransport : INetworkTransport
         tempConnectionId = 0;
         if (hosts.ContainsKey(hostId))
         {
-            tempPeer = hosts[hostId].Connect(address, port, "");
+            tempPeer = hosts[hostId][specialConnectionId].Connect(address, port, "");
             if (tempPeer != null)
             {
                 tempConnectionId = nextConnectionId++;
-                connections[tempConnectionId] = tempPeer;
-                connectionIds[tempPeer.ConnectId] = tempConnectionId;
+                AddConnection(hostId, tempConnectionId, tempPeer);
                 error = (byte)NetworkError.Ok;
             }
             else
@@ -148,14 +181,19 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public bool Disconnect(int hostId, int connectionId, out byte error)
     {
         // Sends a disconnect signal to the connected peer and closes the connection.
-        if (hosts.ContainsKey(hostId) && connections.ContainsKey(connectionId))
+        if (!connections.ContainsKey(hostId))
         {
-            error = (byte)NetworkError.Ok;
-            hosts[hostId].DisconnectPeer(connections[connectionId]);
-            return true;
+            error = (byte)NetworkError.WrongHost;
+            return false;
         }
-        error = (byte)NetworkError.UsageError;
-        return false;
+        if (!connections[hostId].TryGetValue(connectionId, out tempPeer))
+        {
+            error = (byte)NetworkError.WrongConnection;
+            return false;
+        }
+        error = (byte)NetworkError.Ok;
+        tempPeer.Disconnect();
+        return true;
     }
 
     public bool DoesEndPointUsePlatformProtocols(EndPoint endPoint)
@@ -192,12 +230,20 @@ public class LiteNetLibUnetTransport : INetworkTransport
         network = NetworkID.Invalid;
         dstNode = NodeID.Invalid;
         error = (byte)NetworkError.UsageError;
-        if (connections.ContainsKey(connectionId))
+        if (!connections.ContainsKey(hostId))
         {
-            address = connections[connectionId].EndPoint.Address.ToString();
-            port = connections[connectionId].EndPoint.Port;
-            error = (byte)NetworkError.Ok;
+            error = (byte)NetworkError.WrongHost;
+            return;
         }
+        if (!connections[hostId].ContainsKey(connectionId))
+        {
+            error = (byte)NetworkError.WrongConnection;
+            return;
+        }
+        tempPeer = connections[hostId][connectionId];
+        address = tempPeer.EndPoint.Address.ToString();
+        port = tempPeer.EndPoint.Port;
+        error = (byte)NetworkError.Ok;
     }
 
     public int GetCurrentRTT(int hostId, int connectionId, out byte error)
@@ -275,8 +321,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
                 if (!connectionIds.ContainsKey(eventData.netPeer.ConnectId))
                 {
                     connectionId = nextConnectionId++;
-                    connections.Add(connectionId, eventData.netPeer);
-                    connectionIds.Add(eventData.netPeer.ConnectId, connectionId);
+                    AddConnection(hostId, connectionId, eventData.netPeer);
                 }
                 break;
             case NetworkEventType.DataEvent:
@@ -305,17 +350,28 @@ public class LiteNetLibUnetTransport : INetworkTransport
     public bool RemoveHost(int hostId)
     {
         // Closes the opened transport pipe, and closes all connections belonging to that transport pipe.
-        NetManager host;
-        if (hosts.TryGetValue(hostId, out host))
+        // Disconnection connection
+        if (connections.ContainsKey(hostId))
         {
-            var tempConnections = connections.ToArray();
+            var tempConnections = connections[hostId].ToArray();
             foreach (var entry in tempConnections)
             {
-                host.DisconnectPeer(entry.Value);
-                connections.Remove(entry.Key);
+                entry.Value.Disconnect();
+                connections[hostId].Remove(entry.Key);
                 connectionIds.Remove(entry.Value.ConnectId);
             }
-            host.Stop();
+            connections[hostId].Clear();
+            connections.Remove(hostId);
+        }
+        // Stop host
+        if (hosts.ContainsKey(hostId))
+        {
+            var tempHosts = hosts[hostId].ToArray();
+            foreach (var entry in tempHosts)
+            {
+                entry.Value.Stop();
+                hosts[hostId].Remove(entry.Key);
+            }
             hosts.Remove(hostId);
             return true;
         }
@@ -326,18 +382,16 @@ public class LiteNetLibUnetTransport : INetworkTransport
     {
         // Sends data to peer with the given connection ID.
         error = (byte)NetworkError.UsageError;
-        if (!hosts.ContainsKey(hostId))
+        if (!connections.ContainsKey(hostId))
         {
             error = (byte)NetworkError.WrongHost;
             return false;
         }
-
-        if (!connections.ContainsKey(connectionId))
+        if (!connections[hostId].ContainsKey(connectionId))
         {
             error = (byte)NetworkError.WrongConnection;
             return false;
         }
-
         var sendOptions = DeliveryMethod.Unreliable;
         switch (topologies[hostId].DefaultConfig.Channels[channelId].QOS)
         {
@@ -359,7 +413,7 @@ public class LiteNetLibUnetTransport : INetworkTransport
                 sendOptions = DeliveryMethod.Sequenced;
                 break;
         }
-        connections[connectionId].Send(buffer, 0, size, sendOptions);
+        connections[hostId][connectionId].Send(buffer, 0, size, sendOptions);
         error = (byte)NetworkError.Ok;
         return true;
     }
@@ -417,21 +471,28 @@ public class LiteNetLibUnetTransport : INetworkTransport
         updatedHostEventQueue.Enqueue(hostId);
     }
 
-    public NetManager GetHost(int hostId)
+    public NetManager GetHost(int hostId, int specialConnectionId)
     {
-        return hosts[hostId];
+        return hosts[hostId][specialConnectionId];
     }
     
     private void PollEventThreadFunction()
     {
         while (isPollEventRunning)
         {
-            var hostValues = hosts.Values;
-            lock (hostValues)
+            var hosts = this.hosts.Values;
+            lock (hosts)
             {
-                foreach (var host in hostValues)
+                foreach (var host in hosts)
                 {
-                    host.PollEvents();
+                    var hostsByConfig = host.Values;
+                    lock (hostsByConfig)
+                    {
+                        foreach (var hostByConfig in hostsByConfig)
+                        {
+                            hostByConfig.PollEvents();
+                        }
+                    }
                 }
             }
             Thread.Sleep(15);

@@ -11,13 +11,15 @@ public class LiteNetLibEventQueueListener : INetEventListener
 {
     public Queue<LiteNetLibEventData> eventQueue { get; private set; }
     public int hostId { get; private set; }
+    public int specialConnectionId { get; private set; }
     public int maxConnections { get; private set; }
     private LiteNetLibUnetTransport transport;
     private LiteNetLibEventData tempEventData;
-    public LiteNetLibEventQueueListener(LiteNetLibUnetTransport transport, int hostId, int maxConnections)
+    public LiteNetLibEventQueueListener(LiteNetLibUnetTransport transport, int hostId, int specialConnectionId, int maxConnections)
     {
         this.transport = transport;
         this.hostId = hostId;
+        this.specialConnectionId = specialConnectionId;
         this.maxConnections = maxConnections;
         eventQueue = new Queue<LiteNetLibEventData>();
     }
@@ -94,7 +96,7 @@ public class LiteNetLibEventQueueListener : INetEventListener
 
     public void OnConnectionRequest(ConnectionRequest request)
     {
-        var host = transport.GetHost(hostId);
+        var host = transport.GetHost(hostId, specialConnectionId);
         if (host.PeersCount < maxConnections)
             request.Accept();
         else
